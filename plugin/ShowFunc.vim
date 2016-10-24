@@ -3,9 +3,9 @@
 " VimScript:     #397
 "
 " Maintainer:    Dave Vehrs <dvehrs (at) gmail.com>
-" Last Modified: 28 Mar 2006 03:58:12 PM by Dave V
+" Last Modified:  21 Feb 2013 10:59:41 AM by Dave Vehrs
 "
-" Copyright:     (C) 2002,2003,2004,2005,2006 Dave Vehrs
+" Copyright:     (C) 2002-2013 Dave Vehrs
 "
 "                This program is free software; you can redistribute it and/or
 "                modify it under the terms of the GNU General Public License as
@@ -91,6 +91,7 @@ endif
 "                let g:ShowFunc_vim_Kinds = "-v"
 let g:ShowFunc_vim_Kinds = "-v"
 let g:ShowFunc_php_Kinds = "-v"
+let g:ShowFunc_cpp_Kinds = "cdefglmnstuvx"
 
 " To set filters for other languages, simply set a global variable for them 
 " by replacing the _vim_ with the vim filetype (same as ctags for all
@@ -104,6 +105,10 @@ let g:ShowFunc_php_Kinds = "-v"
 if ( exists("loaded_showfunc") || &cp ) | finish | endif 
 let g:loaded_showfunc=1 
 			 
+" Added global variable that declares if the quickfix window is open or closed:
+" (Closed to start)
+let g:quickfix_is_open=0
+
 " Enable filetype detection 
 filetype on
 
@@ -113,18 +118,48 @@ filetype on
 
 augroup showfunc_autocmd
   autocmd!
-  autocmd BufEnter * call <SID>LastWindow()
+  autocmd BufEnter * call <SID>BufCheck()
+"  autocmd BufEnter * call <SID>LastWindow()
 augroup end
 
 "                                                                            }}}
 " ------------------------------------------------------------------------------
 " Functions:                                                                 {{{
 
+" On Buffer Enter, 
+"    - check if in single buffer scan type, if so update cwindow to show listing
+"      for that buffer.
+"    - if entering the last open window and it's the cwindow then close
+"      (vimtip#536).
+function! <SID>BufCheck()
+"   echo "test"
+   if ( &buftype == "quickfix" )
+     echo "quickfix"
+    if ( winbufnr(2) == -1 )
+      quit!
+    endif
+  else
+"    echo "nonfix"
+    let l:currwin = winnr()
+    let l:currtab = tabpagenr()
+    if g:ShowFuncScanType == "current"
+      cclose
+      let g:quickfix_is_open=0
+      call <SID>ShowFuncOpen()
+    endif
+  endif
+
+endfunction
+
 " Rotate through available scan types.
 function! <SID>ChangeScanType()
 	if g:ShowFuncScanType == "buffers"     | let g:ShowFuncScanType = "windows"
 	elseif g:ShowFuncScanType == "windows" | let g:ShowFuncScanType = "current"
 	elseif g:ShowFuncScanType == "current" | let g:ShowFuncScanType = "buffers"
+  endif
+  " Pretend to close quickfix window to reopen with fresh scan type
+  if g:quickfix_is_open
+    let g:quickfix_is_open=0
   endif
 	call <SID>ShowFuncOpen()
 endfunction
@@ -134,6 +169,10 @@ function! <SID>ChangeSortType()
 	if g:ShowFuncSortType == "no"            | let g:ShowFuncSortType = "yes"
 	elseif g:ShowFuncSortType == "yes"       | let g:ShowFuncSortType = "foldcase"
 	elseif g:ShowFuncSortType == "foldcase"  | let g:ShowFuncSortType = "no"
+  endif
+  " Pretend to close quickfix window to reopen with fresh sort
+  if g:quickfix_is_open
+    let g:quickfix_is_open=0
   endif
 	call <SID>ShowFuncOpen()
 endfunction
@@ -159,7 +198,11 @@ function! s:CtagsTest(path)
     if l:rpath == "fail"
       if !has("gui_running") || has("win32")
         echo "ShowFunc Error: Ctags binary not found.\n".
-          \  "Please set g:showfuncctagsbin in your .vimrc.\n" 
+          \  "If not installed:\n".
+          \  "  Please install Exuberant Ctags (example: ".
+          \  "apt-get install exuberant-ctags).\n".
+          \  "If installed in a non-standard location: \n".
+          \  "  Please set g:showfuncctagsbin in your .vimrc.\n" 
       endif
     endif
   else
@@ -233,7 +276,11 @@ function! <SID>DisplayHelp()
     \  " c  Close                   \n".
     \  " r  Refresh                 \n".
     \  " s  Change Scan Sort  \n".
-    \  " t  Change Scan Type \n"
+    \  " t  Change Scan Type \n".
+    \  " \n".
+    \  " If you have the default key (<F1>) enabled to open the ShowFunc\n".
+    \  "window, pressing it again when the window is open will close it.\n".
+    \  "Otherwise, it will toggle with whichever key you've configured."
 endfunction
 
 " Watch for last window and if its a CWindow, then close (vimtip#536).
@@ -267,7 +314,7 @@ function! s:OpenCWin()
     setlocal statusline=ShowFunc.vim\ Tag\ List
   endif
   " Set cwindow specific key mappings.
-  nnoremap <buffer> <silent> c :cclose<CR>
+  nnoremap <buffer> <silent> c :call <SID>ShowFuncOpen()<CR>
   nnoremap <buffer> <silent> h :call <SID>DisplayHelp()<CR>
   nnoremap <buffer> <silent> r :call <SID>ShowFuncOpen()<CR>
   nnoremap <buffer> <silent> s :call <SID>ChangeSortType()<CR>
@@ -337,7 +384,7 @@ function! s:SetGrepPrg(sort)
     endif
   else
     if &filetype == "cpp" | let l:cfiletype = "c++"
-    else | let l:cfiletype = &filetype | endif
+    else                      | let l:cfiletype = &filetype | endif
     let l:filetest = s:TestFileType(l:cfiletype)
     if l:filetest != "false"
       if exists("g:ShowFunc_{&filetype}_Kinds")
@@ -355,55 +402,70 @@ endfunction
 
 function! <SID>ShowFuncOpen()
 	set lazyredraw
-  " Close any existing cwindows.
-	cclose
-  if &lines >= 8
-		let l:count = 0
-    let l:gf_s = &grepformat
-    let l:gp_s = &grepprg
-    set grepformat&vim
-    set grepprg&vim
-    let &grepformat = '%*\k%*\s%t%*\k%*\s%l%*\s%f\ %m' 
-		if ( g:ShowFuncScanType == "buffers" )
-      " Scan all open buffers.
-	    let l:currbuf = bufnr("%")
-	    bufdo! let &grepprg = s:SetGrepPrg(g:ShowFuncSortType) | 
-      \ if &grepprg != "fail" | if &readonly == 0 | update | endif |
-			\ if l:count == 0 | silent! grep! % | let l:count =  l:count + 1 |
-			\ else | silent! grepadd! % | endif | endif
-		  execute 'buffer '.l:currbuf
-		elseif g:ShowFuncScanType == "windows"
-		  " Scan all open windows.
-	    windo let &grepprg = s:SetGrepPrg(g:ShowFuncSortType) | 
-      \ if &grepprg != "fail" | if &readonly == 0 | update | endif |
-			\ if l:count == 0 | silent! grep! %| let l:count =  l:count + 1 |
-			\ else | silent! grepadd! % | endif | endif
-		elseif g:ShowFuncScanType == "current"
-		  " Scan current buffer only.
-      let &grepprg = s:SetGrepPrg(g:ShowFuncSortType)
-		  if &grepprg != "fail"
-        if &readonly == 0 | update | endif
-        silent! grep! %
-		  else
-        echohl WarningMsg
-        echo "ShowFunc Error: Unknown FileType"
-        echohl none
+  if g:quickfix_is_open
+    " Close any existing cwindows.
+    cclose
+    let g:quickfix_is_open=0
+  else
+    if &lines >= 8
+      let l:count = 0
+      let l:gf_s = &grepformat
+      let l:gp_s = &grepprg
+      setlocal grepformat&vim
+      setlocal grepprg&vim
+      " Grepformat: ( From left to right)
+      " %*\S   ==  several non-whitespace characters 
+      " %*\s   ==  one or more whitespace characters
+      " %t     ==  type found (single character)
+      " %*\D   ==  not 0-9 (to strip the end of the type and whitespace)
+      " %l     ==  line number
+      " %*\s   ==  one or more whitespace characters
+      " %f     ==  filename
+      " %*\s   ==  one or more whitespace characters
+      " %m     ==  message (until end of line)
+      let &grepformat = '%*\S%*\s%t%*\D%l%*\s%f%*\s%m'
+      if ( g:ShowFuncScanType == "buffers" )
+        " Scan all open buffers.
+        let l:currbuf = bufnr("%")
+        bufdo! let &grepprg = s:SetGrepPrg(g:ShowFuncSortType) | 
+        \ if &grepprg != "fail" | if &readonly == 0 | update | endif |
+        \ if l:count == 0 | silent! grep! % | let l:count =  l:count + 1 |
+        \ else | silent! grepadd! % | endif | endif
+        execute 'buffer '.l:currbuf
+      elseif g:ShowFuncScanType == "windows"
+        " Scan all open windows.
+        windo let &grepprg = s:SetGrepPrg(g:ShowFuncSortType) | 
+        \ if &grepprg != "fail" | if &readonly == 0 | update | endif |
+        \ if l:count == 0 | silent! grep! %| let l:count =  l:count + 1 |
+        \ else | silent! grepadd! % | endif | endif
+      elseif g:ShowFuncScanType == "current"
+        " Scan current buffer only.
+        let &grepprg = s:SetGrepPrg(g:ShowFuncSortType)
+        if &grepprg != "fail"
+          if &readonly == 0 | update | endif
+          silent! grep! %
+        else
+          echohl WarningMsg
+          echo "ShowFunc Error: Unknown FileType"
+          echohl none
+        endif
       endif
-		endif
-	  let &grepformat = l:gf_s
-    let &grepprg = l:gp_s
-		execute s:OpenCWin()
-		if ( g:ShowFuncScanType == "buffers" || g:ShowFuncScanType ==  "windows" )
-      " Do folding.
-      let g:FoldFileName = ''
-      setlocal foldexpr=s:ShowFuncFolds()
-      setlocal foldmethod=expr
-      setlocal foldtext=ShowFuncFoldText()
+      let &grepformat = l:gf_s
+      let &grepprg = l:gp_s
+      execute s:OpenCWin()
+      if ( g:ShowFuncScanType == "buffers" || g:ShowFuncScanType ==  "windows" )
+        " Do folding.
+        let g:FoldFileName = ''
+        setlocal foldexpr=s:ShowFuncFolds()
+        setlocal foldmethod=expr
+        setlocal foldtext=ShowFuncFoldText()
+      endif
+    else
+      echohl WarningMsg
+      echo "ShowFunc Error: Window too small.\n"
+      echohl none
     endif
-	else
-    echohl WarningMsg
-    echo "ShowFunc Error: Window too small.\n"
-    echohl none
+    let g:quickfix_is_open=1
   endif
 	set nolazyredraw
 	redraw!
@@ -487,9 +549,6 @@ noremap! <silent> <Plug>ShowFunc   <ESC>:call <SID>ShowFuncOpen()<CR>
 " Feature Wishlist:                                                          {{{
 " 1.  If scan is set to "current", make cwindow update on buffer change (except
 "     to the cwindow)
-" 2.  Window size ratios should remain the same as ShowFunc opens and closes.
-" 3.  Patch vim to allow for setlocal statusline.
-" 4.  Expand error format format so that the tag type is grabbed by grep.
 "                                                                            }}}
 " ------------------------------------------------------------------------------
 " Notes:                                                                     {{{
@@ -560,6 +619,13 @@ noremap! <silent> <Plug>ShowFunc   <ESC>:call <SID>ShowFuncOpen()<CR>
 " 1.5.7   03-27-2006   Per request by Diederik Van der Boor, added ability to
 "                      filter the variables kinds that ctags outputs (ver 5.5
 "                      or newer).
+" 1.5.8   07-27-2009   Fixed a C++ type error thanks to a report from Gynvael
+"                      Coldwind
+" 1.5.9   02-21-2013   Improved grepformat string.  Set so that F1 toggles the 
+"                      ShowFunc cwindow as suggested by Halkeye on the Vim Tips
+"                      Wiki.  Tested bug reported by Dtyall, unable to replicate
+"                      in the version I use, which already has the fixes
+"                      suggested.  Sorry I didn't release those sooner.
 "
 "                                                                            }}}
 " ------------------------------------------------------------------------------
